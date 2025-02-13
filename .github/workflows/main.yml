@@ -1,0 +1,104 @@
+name: Rust Build and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Run tests
+        run: cargo test --verbose
+
+  build:
+    name: Build Release
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.target }}
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Get binary name
+        id: get-binary-name
+        shell: bash
+        run: |
+          BINARY_NAME=$(grep '^name = ' Cargo.toml | head -n1 | cut -d'"' -f2)
+          echo "Binary name is: $BINARY_NAME"
+          echo "name=$BINARY_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Build release
+        run: cargo build --verbose --release --target ${{ matrix.target }}
+      
+      - name: Set binary path and name
+        id: binary
+        shell: bash
+        run: |
+          BINARY_NAME="${{ steps.get-binary-name.outputs.name }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "path=target/${{ matrix.target }}/release/${BINARY_NAME}.exe" >> $GITHUB_OUTPUT
+            echo "artifact_name=${BINARY_NAME}-windows.exe" >> $GITHUB_OUTPUT
+          else
+            echo "path=target/${{ matrix.target }}/release/${BINARY_NAME}" >> $GITHUB_OUTPUT
+            echo "artifact_name=${BINARY_NAME}-${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifact
+          cp "${{ steps.binary.outputs.path }}" "artifact/${{ steps.binary.outputs.artifact_name }}"
+      
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.binary.outputs.artifact_name }}
+          path: artifact/${{ steps.binary.outputs.artifact_name }}
+          if-no-files-found: error
